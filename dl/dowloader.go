@@ -45,7 +45,6 @@ type Stats struct {
 }
 
 type segment struct {
-	SegmentId   int
 	Success     bool
 	BitrateInfo []bitrateInfo
 }
@@ -310,7 +309,6 @@ func (d *Downloader) updateStatsSegmentInfo(segIndex int, info *bitrateInfo) {
 	segInfo, ok := d.Stats.Segments[segIndex]
 	if !ok {
 		segInfo = segment{
-			SegmentId:   segIndex,
 			Success:     false,
 			BitrateInfo: make([]bitrateInfo, 0),
 		}
