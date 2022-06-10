@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ravivarshney001/m3u8/parse"
 	"github.com/ravivarshney001/m3u8/tool"
@@ -24,6 +25,7 @@ const (
 )
 
 type Downloader struct {
+	Stats    Stats
 	lock     sync.Mutex
 	queue    []int
 	folder   string
@@ -32,6 +34,26 @@ type Downloader struct {
 	segLen   int
 	filename string
 	result   *parse.Result
+}
+
+type Stats struct {
+	StartTime   time.Time
+	EndTime     time.Time
+	SegCount    int
+	FailedCount int
+	Segments    map[int]segment
+}
+
+type segment struct {
+	SegmentId   int
+	Success     bool
+	BitrateInfo []bitrateInfo
+}
+
+type bitrateInfo struct {
+	Bandwidth uint32
+	Success   bool
+	Err       error
 }
 
 // NewTask returns a Task instance
@@ -71,6 +93,8 @@ func NewTask(output, url, filename string) (*Downloader, error) {
 
 // Start runs downloader
 func (d *Downloader) Start(concurrency int) error {
+	d.Stats.StartTime = time.Now()
+	d.Stats.SegCount = d.segLen
 	var wg sync.WaitGroup
 	// struct{} zero size
 	limitChan := make(chan struct{}, concurrency)
@@ -103,6 +127,7 @@ func (d *Downloader) Start(concurrency int) error {
 	if err := d.merge(); err != nil {
 		return err
 	}
+	d.Stats.EndTime = time.Now()
 	return nil
 }
 
@@ -114,17 +139,33 @@ func (d *Downloader) download(segIndex int) error {
 
 	tsFilename := tsFilename(segIndex)
 	for qualityIdx, _ := range d.result.M3u8.AllPlaylists {
+		bandwidth := d.result.M3u8.AllPlaylists[qualityIdx].Bandwidth
 		tsUrl = d.tsURL(segIndex, qualityIdx)
 		b, e = tool.Get(tsUrl)
 		if e == nil {
+			d.lock.Lock()
+			d.updateStatsSegmentInfo(segIndex, &bitrateInfo{
+				Bandwidth: bandwidth,
+				Success:   true,
+				Err:       nil,
+			})
+			d.lock.Unlock()
 			found = true
 			break
+		} else {
+			d.lock.Lock()
+			d.updateStatsSegmentInfo(segIndex, &bitrateInfo{
+				Bandwidth: bandwidth,
+				Success:   false,
+				Err:       e,
+			})
+			d.lock.Unlock()
 		}
-		quality := d.result.M3u8.AllPlaylists[qualityIdx].Bandwidth
-		fmt.Printf("ts file with bandwidth %d not found for segment index: %d, error: %s\n", quality, segIndex, e.Error())
+		if b != nil {
+			_ = b.Close()
+		}
 	}
 	if !found {
-		_ = b.Close()
 		return errors.Wrap(e, "no resolutions ts files found")
 	}
 
@@ -220,6 +261,7 @@ func (d *Downloader) merge() error {
 	if missingCount > 0 {
 		fmt.Printf("[warning] %d files missing\n", missingCount)
 	}
+	d.Stats.FailedCount = missingCount
 
 	// Create a TS file for merging, all segment files will be written to this file.
 	mFilePath := filepath.Join(d.folder, d.filename)
@@ -259,6 +301,28 @@ func (d *Downloader) merge() error {
 func (d *Downloader) tsURL(segIndex int, qualityInx int) string {
 	seg := d.result.M3u8.AllPlaylists[qualityInx].Segments[segIndex]
 	return tool.ResolveURL(d.result.M3u8.AllPlaylists[qualityInx].BaseUrl, seg.URI)
+}
+
+func (d *Downloader) updateStatsSegmentInfo(segIndex int, info *bitrateInfo) {
+	if d.Stats.Segments == nil {
+		d.Stats.Segments = make(map[int]segment)
+	}
+	segInfo, ok := d.Stats.Segments[segIndex]
+	if !ok {
+		segInfo = segment{
+			SegmentId:   segIndex,
+			Success:     false,
+			BitrateInfo: make([]bitrateInfo, 0),
+		}
+	}
+
+	if info != nil {
+		if info.Success == true {
+			segInfo.Success = true
+		}
+		segInfo.BitrateInfo = append(segInfo.BitrateInfo, *info)
+	}
+	d.Stats.Segments[segIndex] = segInfo
 }
 
 func tsFilename(ts int) string {

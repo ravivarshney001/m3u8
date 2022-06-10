@@ -2,25 +2,30 @@ package m3u8
 
 import (
 	"errors"
-
 	"github.com/ravivarshney001/m3u8/dl"
 )
 
 const chanSize = 25
 
-func DownloadMP4(url, output, fileName string) error {
+type DownloadMP4Response struct {
+	Stats dl.Stats
+}
+
+func DownloadMP4(url, output, fileName string) (DownloadMP4Response, error) {
+	var resp DownloadMP4Response
 	if url == "" {
-		return errors.New("url is required")
+		return resp, errors.New("url is required")
 	}
 	if output == "" {
-		return errors.New("output is required")
+		return resp, errors.New("output is required")
 	}
 	downloader, err := dl.NewTask(output, url, fileName)
 	if err != nil {
-		return err
+		return resp, err
 	}
 	if err := downloader.Start(chanSize); err != nil {
-		return err
+		return resp, err
 	}
-	return nil
+	resp.Stats = downloader.Stats
+	return resp, nil
 }
